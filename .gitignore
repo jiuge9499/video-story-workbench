@@ -1,0 +1,11 @@
+/data/
+/output/
+/tests/
+/scripts/
+/.runtime/
+node_modules/
+__pycache__/
+*.py[cod]
+.DS_Store
+*.log
+*.tmp
