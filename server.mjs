@@ -1,3 +1,5 @@
+import {UNIFORM_VERSION} from './lib/costume.mjs';
+import {deleteProject} from './lib/delete-project.mjs';
 import {retry,settleBranches,failureKind} from './lib/workflow.mjs';
 import http from 'node:http';
 import fs from 'node:fs';
@@ -148,6 +150,7 @@ const server=http.createServer(async(req,res)=>{
     if(match){
       const p=project(match[1]),action=match[2];
       if(req.method==='GET'&&!action)return send(res,200,serialize(p));
+      if(req.method==='DELETE'&&!action)return send(res,200,deleteProject(db,p.id,MEDIA,save));
       if(['GET','HEAD'].includes(req.method)&&action==='export'){
         const r=p.renders.find(r=>r.id===url.searchParams.get('version'))||p.renders.at(-1);if(!r||r.key!==renderKey(p)||!narrationMatches(p))return send(res,409,{error:'成片已过期，请重新合成后导出'});
         const field=url.searchParams.get('file')||'video';if(field==='cover3x4'||field==='social'){if(r.delivery?.key!==renderKey(p))throw Error('发布素材尚未完成');return serve(req,res,mediaFile(field==='cover3x4'?r.delivery.cover:r.delivery.text),true);}
@@ -169,12 +172,12 @@ const server=http.createServer(async(req,res)=>{
       const sm=/^scenes\/([\w-]+)\/(image|version)$/.exec(action||'');
       if(req.method==='POST'&&sm){
         const s=p.scenes.find(s=>s.id===sm[1]);if(!s)throw Error('镜头不存在');if(s.locked)throw Error('请先解锁此镜头');
-        if(sm[2]==='version'){if(!s.versions.some(v=>v.file===b.file))throw Error('图片版本不存在');s.image=b.file;touch(p);return send(res,200,serialize(p));}
+        if(sm[2]==='version'){if(!s.versions.some(v=>v.file===b.file))throw Error('图片版本不存在');s.image=b.file;s.uniformVersion=s.versions.find(v=>v.file===b.file)?.uniformVersion;touch(p);return send(res,200,serialize(p));}
         const image=/^data:image\/(png|jpeg|webp);base64,([A-Za-z0-9+/=]+)$/.exec(b.image||'');if(!image)throw Error('请上传 PNG、JPG 或 WebP 图片');const bytes=Buffer.from(image[2],'base64');if(bytes.length>20*1024*1024)throw Error('图片不能超过 20 MB');
         const rel=`${p.id}/uploads/${id()}.${image[1]==='jpeg'?'jpg':image[1]}`;const file=mediaFile(rel);fs.mkdirSync(path.dirname(file),{recursive:true});fs.writeFileSync(file,bytes);
         try{const info=await probe(file);const stream=info.streams.find(s=>s.width);if(!stream||stream.width<320||stream.height<180)throw Error('图片尺寸至少为 320×180');}catch(e){fs.unlinkSync(file);throw e;}
         // Recheck after asynchronous decoding; a render may have started meanwhile.
-        assertEditable(p);s.image=rel;s.versions.push({file:rel,created:stamp(),label:'导入图片'});touch(p);return send(res,200,serialize(p));
+        assertEditable(p);s.image=rel;s.uniformVersion=UNIFORM_VERSION;s.versions.push({file:rel,uniformVersion:UNIFORM_VERSION,created:stamp(),label:'导入图片'});touch(p);return send(res,200,serialize(p));
       }
       return send(res,404,{error:'操作不存在'});
     }

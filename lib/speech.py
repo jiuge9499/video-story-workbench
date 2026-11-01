@@ -5,6 +5,7 @@ import json
 import subprocess
 import sys
 import re
+from captions import phrase_captions
 from pathlib import Path
 
 # Keep the service compatibility fix local to this workbench.
@@ -76,7 +77,6 @@ def compact_audio(source, target):
 
 
 async def main():
-    import edge_tts
     config = json.loads(Path(sys.argv[1]).read_text())
     dest = Path(sys.argv[1]).parent
     offset = 0.0
@@ -88,6 +88,7 @@ async def main():
         if raw.exists() and boundary_file.exists():
             words = json.loads(boundary_file.read_text())
         else:
+            import edge_tts
             for attempt in range(2):
                 words = []
                 try:
@@ -110,35 +111,11 @@ async def main():
         cuts = compact_audio(paced, wav)
         paced.unlink()
         duration = float(call(['ffprobe','-v','error','-show_entries','format=duration','-of','csv=p=0',str(wav)]))
-        # Restore authored punctuation while keeping service-provided word timings.
-        source = scene['text']
-        cursor = 0
-        group = None
-        for word in words:
-            token = word['text']
-            index = source.find(token, cursor)
-            display = (source[cursor:index] if index >= cursor else '') + token
-            cursor = index + len(token) if index >= 0 else cursor
-            while cursor < len(source) and source[cursor] in '，。！？；：、,.!?;:':
-                display += source[cursor]
-                cursor += 1
-            start = offset + min(duration, retime(word['start'] / config['speed'], cuts))
-            end = offset + min(duration, retime(word['end'] / config['speed'], cuts))
-            if group and len(group['text']) + len(display) > 18:
-                captions.append(group)
-                group = None
-            if group is None:
-                group = {'start': start, 'end': end, 'text': display.strip()}
-            else:
-                group['text'] += display
-                group['end'] = end
-            if display.endswith(('，','。','！','？','；',',','.','!','?',';')):
-                captions.append(group)
-                group = None
-        if group:
-            captions.append(group)
-        if cursor < len(source) and source[cursor:].strip() and captions:
-            captions[-1]['text'] += source[cursor:].strip()
+        timed_words = [dict(text=word['text'],
+                            start=offset+min(duration, retime(word['start']/config['speed'], cuts)),
+                            end=offset+min(duration, retime(word['end']/config['speed'], cuts)))
+                       for word in words]
+        captions.extend(phrase_captions(scene['text'], timed_words))
         scenes.append({'id':scene['id'], 'start':offset, 'end':offset+duration})
         offset += duration
         files.append(wav.name)
@@ -148,7 +125,7 @@ async def main():
     for i, caption in enumerate(captions):
         next_start = captions[i+1]['start'] if i+1 < len(captions) else offset
         caption['end'] = min(next_start, max(caption['end'], caption['start']+0.25) + 0.08)
-    (dest/'speech.json').write_text(json.dumps({'alignment':'word-v2-compact','duration':offset,'scenes':scenes,'captions':captions},ensure_ascii=False,indent=2))
+    (dest/'speech.json').write_text(json.dumps({'alignment':'word-v3-phrases','duration':offset,'scenes':scenes,'captions':captions},ensure_ascii=False,indent=2))
 
 if __name__ == '__main__':
     asyncio.run(main())
