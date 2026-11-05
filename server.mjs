@@ -1,3 +1,4 @@
+import {STYLE_PRESETS} from './lib/video-styles.mjs';
 import {UNIFORM_VERSION} from './lib/costume.mjs';
 import {deleteProject} from './lib/delete-project.mjs';
 import {retry,settleBranches,failureKind} from './lib/workflow.mjs';
@@ -124,7 +125,7 @@ const server=http.createServer(async(req,res)=>{
     if(req.headers.origin&&!allowedHosts.some(h=>req.headers.origin===`http://${h}`))return send(res,403,{error:'请求来源无效'});
     const url=new URL(req.url,`http://127.0.0.1:${PORT}`);const route=decodeURIComponent(url.pathname);
     if(!['GET','HEAD'].includes(req.method)&&req.headers['x-workbench-token']!==TOKEN)return send(res,403,{error:'页面已过期，请刷新后重试'});
-    if(req.method==='GET'&&route==='/api/state')return send(res,200,{token:TOKEN,voices,projects:db.projects.filter(p=>!p.archived).map(serialize),jobs:[...db.jobs.filter(j=>!live(j)).slice(-60),...db.jobs.filter(live)],capabilities:db.capabilities,concurrency:{version:1,subscriptionUsageVersion:1,taskTimingVersion:1,videos:1,images:2,renders:1,memoryCritical,maintenance,queuePause:db.queuePause||null}});
+    if(req.method==='GET'&&route==='/api/state')return send(res,200,{token:TOKEN,voices,stylePresets:STYLE_PRESETS,projects:db.projects.filter(p=>!p.archived).map(serialize),jobs:[...db.jobs.filter(j=>!live(j)).slice(-60),...db.jobs.filter(live)],capabilities:db.capabilities,concurrency:{version:1,subscriptionUsageVersion:1,taskTimingVersion:1,videos:1,images:2,renders:1,memoryCritical,maintenance,queuePause:db.queuePause||null}});
     if(req.method==='GET'&&route==='/api/health')return send(res,200,await health(url.searchParams.has('refresh')));
     if(req.method==='POST'&&route==='/api/projects'){const b=await body(req);const p=freshProject(String(b.title||'未命名作品').slice(0,100));db.projects.push(p);save();return send(res,201,serialize(p));}
     if(req.method==='POST'&&route==='/api/tasks/batch'){
