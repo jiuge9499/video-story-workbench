@@ -1,0 +1,21 @@
+{
+  "version": "2026-11-09-approved",
+  "approvedExample": {
+    "projectId": "81055461-cfbd-40c6-bbed-e5d68162251c",
+    "renderId": "46b92fa3-f1de-46a9-958b-de9ebcb291e7"
+  },
+  "narration": {
+    "emphasisPattern": "(\\*\\*|__)(?=\\S)([\\s\\S]*?\\S)\\1",
+    "rule": "保存文案、标题、分镜和进入配音时自动清理成对加粗控制符，保留正文、数字、引号和实际乘法符号。清理后计算配音缓存，字幕和画面使用清理后的正文。"
+  },
+  "cover": {
+    "methodFile": "cover-method.txt",
+    "selection": "每条视频通读内容后选择合适的主风格；本次黑黄封面是观点纠偏类示例，不是所有视频的固定模板。",
+    "styles": ["opinion", "journal", "presenter", "humanistic", "tech", "business"]
+  },
+  "characters": {
+    "methodFile": "character-expression-method.txt",
+    "rule": "身份、年龄、五官与服装保持连续，表情、视线、头部姿态和手势由当前镜头的含义及角色状态决定。"
+  },
+  "existingDeliverables": "已确认成片和首图保持当前版本；规则自动用于后续新制作、缺失镜头及用户主动重做的镜头。"
+}

@@ -1,3 +1,5 @@
+import {VOICE_CLIENT,assertSpeechApproved,speechBlocked} from './lib/shared-voice.mjs';
+import {syncSharedVoices} from './lib/voices.mjs';
 import {STYLE_PRESETS} from './lib/video-styles.mjs';
 import {UNIFORM_VERSION} from './lib/costume.mjs';
 import {deleteProject} from './lib/delete-project.mjs';
@@ -10,7 +12,7 @@ import {ROOT,MEDIA,DATA,mediaFile,loadStore} from './lib/store.mjs';
 import {MAX_SCENES,voices,freshProject,scene,splitScenes,validateProject,speechKey,renderKey,narrationMatches,id} from './lib/model.mjs';
 import {CODEX,PYTHON,run,probe,hyperframes,explainError} from './lib/process.mjs';
 import * as pipeline from './lib/pipeline.mjs';
-import {ResourcePool,createScheduler,watchMemory} from './lib/concurrency.mjs';
+import {ResourcePool,createScheduler,watchMemory,IMAGE_CONCURRENCY,VIDEO_CONCURRENCY,TOTAL_IMAGE_CONCURRENCY} from './lib/concurrency.mjs';
 import {createUsageTracker,readSubscription,summarizeSubscription} from './lib/subscription-usage.mjs';
 
 const PORT=Number(process.env.PORT||8776),TOKEN=crypto.randomBytes(24).toString('hex');
@@ -21,7 +23,7 @@ const live=j=>['queued','running','cancelling','waiting'].includes(j.state);
 const project=id=>{const p=db.projects.find(x=>x.id===id);if(!p)throw Object.assign(Error('作品不存在'),{status:404});return p;};
 const assertEditable=p=>{if(db.jobs.some(j=>j.projectId===p.id&&live(j)))throw Object.assign(Error('此作品正在制作，停止或等待任务完成后再修改'),{status:409});};
 const touch=p=>{p.revision++;p.updated=stamp();save();};
-const serialize=p=>({...p,taskRecords:db.jobs.filter(j=>j.projectId===p.id).map(j=>({jobId:j.id,kind:j.kind,state:j.state,created:j.created,started:j.started,finished:j.finished})),subscriptionSummary:summarizeSubscription(db.jobs.filter(j=>j.projectId===p.id&&j.subscriptionUsage).map(j=>j.subscriptionUsage)),subscriptionRecords:db.jobs.filter(j=>j.projectId===p.id&&j.subscriptionUsage).map(j=>({jobId:j.id,kind:j.kind,state:j.state,started:j.started,finished:j.finished,...j.subscriptionUsage})),speechCurrent:narrationMatches(p)&&p.speech?.key===speechKey(p),renderCurrent:narrationMatches(p)&&!!p.renders.length&&p.renders.at(-1).key===renderKey(p)});
+const serialize=p=>({...p,taskRecords:db.jobs.filter(j=>j.projectId===p.id).map(j=>({jobId:j.id,kind:j.kind,state:j.state,created:j.created,started:j.started,finished:j.finished})),subscriptionSummary:summarizeSubscription(db.jobs.filter(j=>j.projectId===p.id&&j.subscriptionUsage).map(j=>j.subscriptionUsage)),subscriptionRecords:db.jobs.filter(j=>j.projectId===p.id&&j.subscriptionUsage).map(j=>({jobId:j.id,kind:j.kind,state:j.state,started:j.started,finished:j.finished,...j.subscriptionUsage})),speechCurrent:!speechBlocked(p)&&narrationMatches(p)&&p.speech?.key===speechKey(p),renderCurrent:!speechBlocked(p)&&narrationMatches(p)&&!!p.renders.length&&p.renders.at(-1).key===renderKey(p)});
 const send=(res,code,body)=>{res.writeHead(code,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(body));};
 async function body(req){let bytes=0;const chunks=[];for await(const c of req){bytes+=c.length;if(bytes>28*1024*1024)throw Error('上传文件过大，图片上限 20 MB');chunks.push(c);}try{return JSON.parse(Buffer.concat(chunks).toString()||'{}');}catch{throw Error('请求内容无效');}}
 function dispatch(p,kind,sceneId){
@@ -33,7 +35,7 @@ function dispatch(p,kind,sceneId){
   const j={id:id(),projectId:p.id,kind,sceneId,state:'queued',progress:0,message:'等待制作',created:stamp(),inputRevision:p.revision};db.jobs.push(j);save();setImmediate(drain);return j;
 }
 function drain(){scheduler.drain();}
-const scheduler=createScheduler({jobs:db.jobs,execute:executeJob,canStart:()=>!memoryCritical&&!maintenance&&!db.queuePause});
+const scheduler=createScheduler({jobs:db.jobs,execute:executeJob,limit:VIDEO_CONCURRENCY,canStart:()=>!memoryCritical&&!maintenance&&!db.queuePause});
 const stopMemoryWatch=watchMemory(critical=>{memoryCritical=critical;resources.setPressure(critical);if(!critical)drain();});
 async function executeJob(job){
   const p=project(job.projectId),controller=new AbortController();controllers.set(job.id,controller);
@@ -97,12 +99,19 @@ async function executeJob(job){
     if(e.details){try{fs.writeFileSync(path.join(dir,'error.log'),e.details);}catch{}}}
   finally{const message=job.message;job.message='正在记录制作后订阅额度';save();await usageTracker.end(job);job.state=outcome;job.message=message;job.finished=stamp();p.updated=stamp();controllers.delete(job.id);save();}
 }
+let voiceRefreshAt=0,voiceRefreshPromise=null;
+async function refreshVoices(force=false){
+  if(!force&&Date.now()-voiceRefreshAt<30000)return;
+  if(voiceRefreshPromise)return voiceRefreshPromise;
+  voiceRefreshPromise=run(PYTHON,[VOICE_CLIENT,'voices'],{timeout:30000}).then(output=>syncSharedVoices(JSON.parse(output))).finally(()=>{voiceRefreshAt=Date.now();voiceRefreshPromise=null;});
+  return voiceRefreshPromise;
+}
 let healthCache=null,healthPromise=null;
 async function health(force=false){
   if(!force&&healthCache&&Date.now()-healthCache.time<60000)return healthCache.value;
   if(healthPromise)return healthPromise;
   healthPromise=(async()=>{
-    const results=await Promise.allSettled([run(CODEX,['login','status'],{timeout:15000}),run(PYTHON,['-c',`import sys;sys.path.insert(0,${JSON.stringify(path.join(ROOT,'lib/python-packages'))});import edge_tts;print(edge_tts.__version__)`],{timeout:10000}),run('ffmpeg',['-version'],{timeout:10000})]);
+    const results=await Promise.allSettled([run(CODEX,['login','status'],{timeout:15000}),refreshVoices(true),run('ffmpeg',['-version'],{timeout:10000})]);
     const auth=results[0];let renderer=false;try{renderer=fs.existsSync(hyperframes());}catch{}
     const subscription=await readSubscription();
     const value={subscription,login:auth.status==='fulfilled'&&/Logged in using ChatGPT/i.test(auth.value),tts:results[1].status==='fulfilled',render:results[2].status==='fulfilled'&&renderer,text:db.capabilities.text,image:db.capabilities.image,checked:stamp(),usage:subscription.ok?'已接入订阅额度记录':'订阅额度暂不可用'};
@@ -125,7 +134,7 @@ const server=http.createServer(async(req,res)=>{
     if(req.headers.origin&&!allowedHosts.some(h=>req.headers.origin===`http://${h}`))return send(res,403,{error:'请求来源无效'});
     const url=new URL(req.url,`http://127.0.0.1:${PORT}`);const route=decodeURIComponent(url.pathname);
     if(!['GET','HEAD'].includes(req.method)&&req.headers['x-workbench-token']!==TOKEN)return send(res,403,{error:'页面已过期，请刷新后重试'});
-    if(req.method==='GET'&&route==='/api/state')return send(res,200,{token:TOKEN,voices,stylePresets:STYLE_PRESETS,projects:db.projects.filter(p=>!p.archived).map(serialize),jobs:[...db.jobs.filter(j=>!live(j)).slice(-60),...db.jobs.filter(live)],capabilities:db.capabilities,concurrency:{version:1,subscriptionUsageVersion:1,taskTimingVersion:1,videos:1,images:2,renders:1,memoryCritical,maintenance,queuePause:db.queuePause||null}});
+    if(req.method==='GET'&&route==='/api/state'){await refreshVoices().catch(()=>{});return send(res,200,{token:TOKEN,voices,stylePresets:STYLE_PRESETS,projects:db.projects.filter(p=>!p.archived).map(serialize),jobs:[...db.jobs.filter(j=>!live(j)).slice(-60),...db.jobs.filter(live)],capabilities:db.capabilities,concurrency:{version:2,subscriptionUsageVersion:1,taskTimingVersion:1,videos:VIDEO_CONCURRENCY,images:TOTAL_IMAGE_CONCURRENCY,imagesPerVideo:IMAGE_CONCURRENCY,renders:1,memoryCritical,maintenance,queuePause:db.queuePause||null}});}
     if(req.method==='GET'&&route==='/api/health')return send(res,200,await health(url.searchParams.has('refresh')));
     if(req.method==='POST'&&route==='/api/projects'){const b=await body(req);const p=freshProject(String(b.title||'未命名作品').slice(0,100));db.projects.push(p);save();return send(res,201,serialize(p));}
     if(req.method==='POST'&&route==='/api/tasks/batch'){
@@ -153,6 +162,7 @@ const server=http.createServer(async(req,res)=>{
       if(req.method==='GET'&&!action)return send(res,200,serialize(p));
       if(req.method==='DELETE'&&!action)return send(res,200,deleteProject(db,p.id,MEDIA,save));
       if(['GET','HEAD'].includes(req.method)&&action==='export'){
+        assertSpeechApproved(p);
         const r=p.renders.find(r=>r.id===url.searchParams.get('version'))||p.renders.at(-1);if(!r||r.key!==renderKey(p)||!narrationMatches(p))return send(res,409,{error:'成片已过期，请重新合成后导出'});
         const field=url.searchParams.get('file')||'video';if(field==='cover3x4'||field==='social'){if(r.delivery?.key!==renderKey(p))throw Error('发布素材尚未完成');return serve(req,res,mediaFile(field==='cover3x4'?r.delivery.cover:r.delivery.text),true);}
         if(!['video','srt','cover','publish'].includes(field)||!r[field])throw Error('此导出文件不存在');return serve(req,res,mediaFile(r[field]),true);
