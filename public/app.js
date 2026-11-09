@@ -49,20 +49,6 @@ function quotaWindow(w){
  const mins=w.windowDurationMins;
  return `${w.bucketName==='codex'?'订阅':w.bucketName} · ${mins===10080?'周额度':mins===300?'5 小时额度':mins>=1440?(mins/1440)+' 天额度':mins>=60?(mins/60)+' 小时额度':mins+' 分钟额度'}`;
 }
-function quotaResult(record){
- if(!record)return '尚无额度记录';
- if(record.status==='recording')return '正在记录制作前后额度';
- if(record.status==='interrupted')return '任务中断，缺少结束快照';
- if(record.status==='account_changed')return '账户无法核对或已切换，无法比较';
- if(record.status==='unavailable')return '额度读取不完整，无法比较';
- const rows=(record.windows||[]).map(w=>`${esc(quotaWindow(w))}：${w.reason?esc(w.reason):`${w.beforeUsedPercent}% → ${w.afterUsedPercent}%（${w.deltaPoints===0?'未观察到变化':`增加 ${w.deltaPoints} 个百分点`}）`}`);
- return rows.join('<br>')+(record.status==='overlap'?'<br><strong>与其他制作任务重叠，不能单独归因，也不能相加。</strong>':'');
-}
-function quotaSummary(project){
- const s=project.subscriptionSummary;
- if(!s?.included)return s?.excluded?'暂无可单独累计的记录':'尚无额度记录';
- return s.windows.map(w=>`${esc(quotaWindow(w))}累计观测变化 ${w.deltaPoints} 个百分点（${w.tasks} 次任务）`).join('<br>')+(s.excluded?`<br>另有 ${s.excluded} 次记录不计入累计（重叠、读取不完整或中断）`:'');
-}
 function timeRecords(){return p.taskRecords||state.jobs.filter(j=>j.projectId===p.id).map(j=>({...j,jobId:j.id}));}
 function recordTime(r){return r.state==='queued'?'排队中，尚未开始':!r.started?'未开始制作':r.state==='interrupted'?'已中断，用时未知':`${['running','cancelling'].includes(r.state)?'已用时':'用时'} ${formatDuration(taskDuration(r))}`;}
 function subscriptionPanel(){

@@ -8,7 +8,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import {ROOT,MEDIA,DATA,mediaFile,loadStore} from './lib/store.mjs';
+import {ROOT,MEDIA,mediaFile,loadStore} from './lib/store.mjs';
 import {MAX_SCENES,voices,freshProject,scene,splitScenes,validateProject,speechKey,renderKey,narrationMatches,id} from './lib/model.mjs';
 import {CODEX,PYTHON,run,probe,hyperframes,explainError} from './lib/process.mjs';
 import * as pipeline from './lib/pipeline.mjs';
